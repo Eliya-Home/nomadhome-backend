@@ -7,7 +7,6 @@ require("dotenv").config();
 const admin = require("firebase-admin");
 
 const app = express();
-
 app.use(cors());
 app.use(express.json());
 
@@ -58,6 +57,61 @@ admin.initializeApp({
 const db = admin.firestore();
 
 /* ==============================
+   🧠 AI FRAUD ENGINE
+================================= */
+
+async function calculateRiskScore(booking) {
+
+    let risk = 0;
+
+    if (booking.depositAmount > 10000) risk += 30;
+    if (booking.months > 12) risk += 20;
+    if (!booking.txid) risk += 15;
+    if (booking.totalAmount > 50000) risk += 25;
+
+    const recentBookings = await db.collection("bookings")
+        .where("userEmail", "==", booking.userEmail)
+        .get();
+
+    if (recentBookings.size > 3) risk += 20;
+
+    let level = "Low";
+    if (risk >= 60) level = "High";
+    else if (risk >= 30) level = "Medium";
+
+    return { riskScore: risk, riskLevel: level };
+}
+
+/* ==============================
+   🔍 FRAUD SCAN LOOP
+================================= */
+
+async function scanFraudBookings() {
+
+    const snapshot = await db.collection("bookings").get();
+
+    snapshot.forEach(async (docSnap) => {
+
+        const booking = docSnap.data();
+
+        if (!booking.riskScore) {
+
+            const result = await calculateRiskScore(booking);
+
+            await db.collection("bookings")
+                .doc(docSnap.id)
+                .update({
+                    riskScore: result.riskScore,
+                    riskLevel: result.riskLevel
+                });
+
+            console.log("Risk analyzed:", docSnap.id);
+        }
+
+    });
+}
+
+/* ==============================
    🔁 AUTO RELEASE ENGINE
 ================================= */
 
@@ -65,9 +119,9 @@ async function autoReleaseEscrow() {
 
     const snapshot = await db.collection("bookings").get();
 
-    snapshot.forEach(async (doc) => {
+    snapshot.forEach(async (docSnap) => {
 
-        const booking = doc.data();
+        const booking = docSnap.data();
 
         if (
             booking.status === "Approved - Escrow Locked" &&
@@ -76,20 +130,21 @@ async function autoReleaseEscrow() {
         ) {
 
             await db.collection("bookings")
-                .doc(doc.id)
+                .doc(docSnap.id)
                 .update({
                     status:"Escrow Released (Auto)",
                     releasedAt:new Date()
                 });
 
-            console.log("Auto released:", doc.id);
+            console.log("Auto released:", docSnap.id);
         }
 
     });
 }
 
-// run every 30 sec
+// 🔁 RUN ENGINES
 setInterval(autoReleaseEscrow, 30000);
+setInterval(scanFraudBookings, 45000);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
