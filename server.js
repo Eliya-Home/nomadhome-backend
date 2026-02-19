@@ -105,13 +105,13 @@ Return JSON only:
         return {
             riskScore: 50,
             riskLevel: "Medium",
-            reason: "AI parsing error fallback"
+            reason: "AI parsing fallback"
         };
     }
 }
 
 /* ==============================
-   🔍 FRAUD SCAN LOOP
+   🔍 FRAUD + AUTO BLOCK LOOP
 ================================= */
 
 async function scanFraudBookings() {
@@ -126,12 +126,20 @@ async function scanFraudBookings() {
 
             const result = await analyzeBookingWithAI(booking);
 
+            let newStatus = booking.status;
+
+            // 🚫 AUTO BLOCK IF HIGH RISK
+            if (result.riskLevel === "High") {
+                newStatus = "Blocked - High Risk";
+            }
+
             await db.collection("bookings")
                 .doc(docSnap.id)
                 .update({
                     aiRiskScore: result.riskScore,
                     aiRiskLevel: result.riskLevel,
-                    aiReason: result.reason
+                    aiReason: result.reason,
+                    status: newStatus
                 });
 
             console.log("AI analyzed:", docSnap.id);
@@ -171,9 +179,9 @@ async function autoReleaseEscrow() {
     });
 }
 
-// run loops
-setInterval(autoReleaseEscrow, 30000);
+// run engines
 setInterval(scanFraudBookings, 60000);
+setInterval(autoReleaseEscrow, 30000);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
