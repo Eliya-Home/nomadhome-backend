@@ -89,3 +89,11 @@ app.post("/create-booking", async (req, res) => {
 app.listen(5000, () => {
   console.log("🚀 Server running on port 5000");
 });
+const rateLimit = require("express-rate-limit");
+
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100
+});
+
+app.use(limiter);
