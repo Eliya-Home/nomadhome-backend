@@ -5,6 +5,7 @@ const rateLimit = require("express-rate-limit");
 require("dotenv").config();
 
 const admin = require("firebase-admin");
+const OpenAI = require("openai");
 
 const app = express();
 app.use(cors());
@@ -17,7 +18,27 @@ const limiter = rateLimit({
 app.use(limiter);
 
 app.get("/", (req, res) => {
-    res.send("NomadHome Secure Payment Server Running 🚀");
+    res.send("NomadHome AI Fraud Server Running 🚀");
+});
+
+/* ==============================
+   🔥 FIREBASE ADMIN INIT
+================================= */
+
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+
+admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+});
+
+const db = admin.firestore();
+
+/* ==============================
+   🧠 OPENAI INIT
+================================= */
+
+const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY
 });
 
 /* ==============================
@@ -45,41 +66,48 @@ app.post("/verify-crypto", async (req, res) => {
 });
 
 /* ==============================
-   🔥 FIREBASE ADMIN INIT
+   🧠 AI FRAUD ANALYSIS
 ================================= */
 
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+async function analyzeBookingWithAI(booking) {
 
-admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
-});
+    const prompt = `
+You are a fintech fraud detection AI.
 
-const db = admin.firestore();
+Analyze this booking:
 
-/* ==============================
-   🧠 AI FRAUD ENGINE
-================================= */
+User: ${booking.userEmail}
+Deposit: ${booking.depositAmount}
+Total: ${booking.totalAmount}
+Months: ${booking.months}
+Currency: ${booking.currency}
 
-async function calculateRiskScore(booking) {
+Return JSON only:
 
-    let risk = 0;
+{
+  "riskScore": number (0-100),
+  "riskLevel": "Low" | "Medium" | "High",
+  "reason": "short explanation"
+}
+`;
 
-    if (booking.depositAmount > 10000) risk += 30;
-    if (booking.months > 12) risk += 20;
-    if (!booking.txid) risk += 15;
-    if (booking.totalAmount > 50000) risk += 25;
+    const completion = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.2
+    });
 
-    const recentBookings = await db.collection("bookings")
-        .where("userEmail", "==", booking.userEmail)
-        .get();
+    const text = completion.choices[0].message.content;
 
-    if (recentBookings.size > 3) risk += 20;
-
-    let level = "Low";
-    if (risk >= 60) level = "High";
-    else if (risk >= 30) level = "Medium";
-
-    return { riskScore: risk, riskLevel: level };
+    try {
+        return JSON.parse(text);
+    } catch {
+        return {
+            riskScore: 50,
+            riskLevel: "Medium",
+            reason: "AI parsing error fallback"
+        };
+    }
 }
 
 /* ==============================
@@ -94,18 +122,19 @@ async function scanFraudBookings() {
 
         const booking = docSnap.data();
 
-        if (!booking.riskScore) {
+        if (!booking.aiRiskScore) {
 
-            const result = await calculateRiskScore(booking);
+            const result = await analyzeBookingWithAI(booking);
 
             await db.collection("bookings")
                 .doc(docSnap.id)
                 .update({
-                    riskScore: result.riskScore,
-                    riskLevel: result.riskLevel
+                    aiRiskScore: result.riskScore,
+                    aiRiskLevel: result.riskLevel,
+                    aiReason: result.reason
                 });
 
-            console.log("Risk analyzed:", docSnap.id);
+            console.log("AI analyzed:", docSnap.id);
         }
 
     });
@@ -142,9 +171,9 @@ async function autoReleaseEscrow() {
     });
 }
 
-// 🔁 RUN ENGINES
+// run loops
 setInterval(autoReleaseEscrow, 30000);
-setInterval(scanFraudBookings, 45000);
+setInterval(scanFraudBookings, 60000);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
